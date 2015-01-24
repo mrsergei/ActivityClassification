@@ -1,0 +1,117 @@
+---
+title: "Predictive Activity Classification of Weight Lifting Exercises"
+date: "January 23, 2015"
+output:
+  html_document:
+    keep_md: yes
+---
+### Overview   
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, our goal is to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants to classify weight lifting exersies in 5 different ways. More information is available from the website here: <http://groupware.les.inf.puc-rio.br/har> (see the section on the Weight Lifting Exercise Dataset). 
+
+```{r libraries, echo=FALSE, warning=FALSE, error=FALSE, message=FALSE}
+library(caret)
+library(randomForest)
+library(gbm)
+library(e1071)
+library(doMC)
+```
+
+###Data analysis and preprocessing   
+
+Loading raw data:
+```{r dataload, warning=FALSE, error=FALSE, message=FALSE}
+trnA <- read.table("../data/pml-training.csv", 
+                   header = TRUE, 
+                   sep = ",",
+                   fill = TRUE, 
+                   stringsAsFactors = FALSE)
+
+tstA <- read.table("../data/pml-testing.csv", 
+                   header = TRUE, 
+                   sep = ",",
+                   fill = TRUE, 
+                   stringsAsFactors = FALSE)
+
+trnA$classe <- as.factor(trnA$classe)
+```
+
+Training data set contains `r nrow(trnA)` observations of `r ncol(trnA)` features.
+Analysis of the raw data we decided to first 7 columns that contain row number, user name, raw time stamps, window indicator and window number
+
+```{r filter1, warning=FALSE, error=FALSE, message=FALSE}
+trn <- trnA[, -(1:7)]
+tst <- tstA[, -(1:7)]
+```
+Further analysis of the data reviews many fetures containing large quantities of NAs
+```{r NAs, warning=FALSE, error=FALSE, message=FALSE}
+nas <- apply(trn[1:(ncol(trn)-1)], 2, function(x){mean(is.na(suppressWarnings(as.numeric(x))))})
+```
+```{r plotNAs, echo=FALSE, warning=FALSE, error=FALSE, message=FALSE}
+hist(nas, breaks=100, main="Histogram of NAs", xlab="Proportion of NAs across observartions")
+```   
+
+As you can see form the plot, there are two classes of features - ones that contain no NAs(`r sum(nas==0)`) and others that almos all NAs(`r sum(nas>0)`). For teh prupse of builidng the predictiove model we will reduce our data set only to features that have no NAs across observations.
+
+```{r removeNAs, warning=FALSE, error=FALSE, message=FALSE}
+trn <- trn[, !(nas > 0)]
+tst <- tst[, !(nas > 0)]
+```
+
+#####Data transformations
+Subsequent analysis of the remaning features across training set observations revield s significant number of features with greater than 1 absoute value of skewness:
+
+```{r skewness, warning=FALSE, error=FALSE, message=FALSE}
+skewVals <- apply(trn[, -ncol(trn)], 2, skewness)
+sort(skewVals[abs(skewVals)>1], decreasing = TRUE)
+```
+
+Unfortuantely no suitable data transoformation was identifued to reduce the skeness of the data. Neitehr `log` nor `BoxCox` trnasformations are applicable for where values are negaive. `expoTrans` transformation resulted in some `Inf` values across several predictors.
+
+#####Data filtering
+We have analyzed for near zero variance across the features:
+```{r nearZeroVariance, warning=FALSE, error=FALSE, message=FALSE}
+nearZeroVar(trn)
+```
+No near zero varaimce has been identifed within remaning data.
+
+
+```{r correlation, warning=FALSE, error=FALSE, message=FALSE}
+high.cor <- findCorrelation(cor(trn[, -ncol(trn)]), 0.90)
+trn <- trn[, -high.cor]
+tst <- tst[, -high.cor]
+```
+
+###Model training, selection and vlaidation
+
+```{r dataSlicing, warning=FALSE, error=FALSE, message=FALSE}
+inTrain    <- createDataPartition(y = trn$classe, p = 0.70, list = FALSE)
+training   <- trn[inTrain,]
+validation <- trn[-inTrain,]
+
+```
+
+```{r modelTrainingRF,cache=TRUE,eval=FALSE, warning=FALSE, error=FALSE, message=FALSE}
+registerDoMC(cores = 8)
+set.seed(420)
+trc <- trainControl(method = "cv")
+modFitRF  <- train(classe ~ ., data=training, trControl=trc, method="rf")
+modFitRF
+```
+
+```{r outRF, echo=FALSE}
+fit3
+```
+
+
+```{r modelTrainingGBM, eval=FALSE, warning=FALSE, error=FALSE, message=FALSE}
+registerDoMC(cores = 8)
+set.seed(420)
+trc <- trainControl(method = "cv")
+modFitGBM <- train(classe ~ ., data=training, trControl=trc3, method="gbm")
+modFitGBM
+```
+
+
+###Summary
+
+###References
