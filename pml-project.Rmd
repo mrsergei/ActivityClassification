@@ -6,7 +6,7 @@ output:
     keep_md: yes
 ---
 ### Overview   
-Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, our goal is to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants to classify weight lifting exersies in 5 different ways. More information is available from the website here: <http://groupware.les.inf.puc-rio.br/har> (see the section on the Weight Lifting Exercise Dataset). 
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, our goal is to use data from accelerometers on the belt, forearm, arm, and dumbbell of 6 participants to classify weight lifting exercise in 5 different ways. More information is available from the website here: <http://groupware.les.inf.puc-rio.br/har> (see the section on the Weight Lifting Exercise Dataset). 
 
 ```{r libraries, echo=FALSE, warning=FALSE, error=FALSE, message=FALSE}
 library(caret)
@@ -14,12 +14,25 @@ library(randomForest)
 library(gbm)
 library(e1071)
 library(doMC)
+library(gridExtra)
+```
+
+```{r echo=FALSE}
+plot_conf_table <- function(cft){
+    qplot(0,0, geom = "blank") + 
+        theme_bw() + 
+        theme(line = element_blank(), 
+              text = element_blank()) +
+        annotation_custom(grob = tableGrob(cft, gpar.coltext = gpar(cex = 3), 
+                                           gpar.rowtext = gpar(cex = 3))
+                          )
+}
 ```
 
 ###Data analysis and preprocessing   
 
 Loading raw data:
-```{r dataload, warning=FALSE, error=FALSE, message=FALSE}
+```{r dataload, cache=TRUE, warning=FALSE, error=FALSE, message=FALSE}
 trnA <- read.table("../data/pml-training.csv", 
                    header = TRUE, 
                    sep = ",",
@@ -38,80 +51,115 @@ trnA$classe <- as.factor(trnA$classe)
 Training data set contains `r nrow(trnA)` observations of `r ncol(trnA)` features.
 Analysis of the raw data we decided to first 7 columns that contain row number, user name, raw time stamps, window indicator and window number
 
-```{r filter1, warning=FALSE, error=FALSE, message=FALSE}
+```{r filter1, cache=TRUE, warning=FALSE, error=FALSE, message=FALSE}
 trn <- trnA[, -(1:7)]
 tst <- tstA[, -(1:7)]
 ```
-Further analysis of the data reviews many fetures containing large quantities of NAs
-```{r NAs, warning=FALSE, error=FALSE, message=FALSE}
+Further analysis of the data reviews many features containing large quantities of NAs
+```{r NAs, cache=TRUE, warning=FALSE, error=FALSE, message=FALSE}
 nas <- apply(trn[1:(ncol(trn)-1)], 2, function(x){mean(is.na(suppressWarnings(as.numeric(x))))})
 ```
 ```{r plotNAs, echo=FALSE, warning=FALSE, error=FALSE, message=FALSE}
-hist(nas, breaks=100, main="Histogram of NAs", xlab="Proportion of NAs across observartions")
+hist(nas, breaks=100, col = "green", 
+     main="Histogram of NAs", 
+     xlab="Proportion of NAs across observations")
 ```   
 
-As you can see form the plot, there are two classes of features - ones that contain no NAs(`r sum(nas==0)`) and others that almos all NAs(`r sum(nas>0)`). For teh prupse of builidng the predictiove model we will reduce our data set only to features that have no NAs across observations.
+As you can see form the plot, there are two classes of features - ones that contain no NAs(`r sum(nas==0)`) and others that almost all NAs(`r sum(nas>0)`). For the purpose of building the predictive model we will reduce our data set only to features that have no NAs across observations.
 
-```{r removeNAs, warning=FALSE, error=FALSE, message=FALSE}
+```{r removeNAs, cache=TRUE, warning=FALSE, error=FALSE, message=FALSE}
 trn <- trn[, !(nas > 0)]
 tst <- tst[, !(nas > 0)]
 ```
 
 #####Data transformations
-Subsequent analysis of the remaning features across training set observations revield s significant number of features with greater than 1 absoute value of skewness:
+Subsequent analysis of the remaining features across training set observations reviled s significant number of features with greater than 1 absolute value of skewness:
 
-```{r skewness, warning=FALSE, error=FALSE, message=FALSE}
+```{r skewness, cache=TRUE, warning=FALSE, error=FALSE, message=FALSE}
 skewVals <- apply(trn[, -ncol(trn)], 2, skewness)
 sort(skewVals[abs(skewVals)>1], decreasing = TRUE)
 ```
 
-Unfortuantely no suitable data transoformation was identifued to reduce the skeness of the data. Neitehr `log` nor `BoxCox` trnasformations are applicable for where values are negaive. `expoTrans` transformation resulted in some `Inf` values across several predictors.
+Unfortunately no suitable data transformation was identified to reduce the skewness of the data. Neither `log` nor `BoxCox` transformations are applicable for where values are negative. `expoTrans` transformation resulted in some `Inf` values across several predictors.
 
 #####Data filtering
-We have analyzed for near zero variance across the features:
-```{r nearZeroVariance, warning=FALSE, error=FALSE, message=FALSE}
+We have analyzed for near zero variance across the features to find none:
+
+```{r nearZeroVariance, cache=TRUE, warning=FALSE, error=FALSE, message=FALSE}
 nearZeroVar(trn)
 ```
-No near zero varaimce has been identifed within remaning data.
 
+We have identified and removed highly correlated feature fromt the data sets resulting in only 45 predictors to be used to classify the activities.
 
-```{r correlation, warning=FALSE, error=FALSE, message=FALSE}
+```{r correlation, cache=TRUE, warning=FALSE, error=FALSE, message=FALSE}
 high.cor <- findCorrelation(cor(trn[, -ncol(trn)]), 0.90)
 trn <- trn[, -high.cor]
 tst <- tst[, -high.cor]
+ncol(trn)-1
 ```
 
-###Model training, selection and vlaidation
+###Model training, selection and validation
 
-```{r dataSlicing, warning=FALSE, error=FALSE, message=FALSE}
+Remaining data set was split in training and validation set. We have evaluated two different modeling approaches - Generalized Boosted Regression Modeling and Classification and Regression with Random Forest. We used Accuracy as the metric to select best modeling approaches and tune model parameters to minimize predicted out of sample error. We used validation data set to test Out Of Sample Error for the final selection of the model to use for prediction.
+
+```{r dataSlicing, cache=TRUE, warning=FALSE, error=FALSE, message=FALSE}
 inTrain    <- createDataPartition(y = trn$classe, p = 0.70, list = FALSE)
 training   <- trn[inTrain,]
 validation <- trn[-inTrain,]
-
 ```
 
-```{r modelTrainingRF,cache=TRUE,eval=FALSE, warning=FALSE, error=FALSE, message=FALSE}
+####Stochastic Gradient Boosting
+
+First we have evaluated gradient boosted trees algorithm against the data set using 10 fold cross validation resampling to tune model parameters.
+
+```{r modelTrainingGBM, eval=TRUE, cache=TRUE, warning=FALSE, error=FALSE, message=FALSE}
 registerDoMC(cores = 8)
 set.seed(420)
 trc <- trainControl(method = "cv")
-modFitRF  <- train(classe ~ ., data=training, trControl=trc, method="rf")
-modFitRF
-```
-
-```{r outRF, echo=FALSE}
-fit3
-```
-
-
-```{r modelTrainingGBM, eval=FALSE, warning=FALSE, error=FALSE, message=FALSE}
-registerDoMC(cores = 8)
-set.seed(420)
-trc <- trainControl(method = "cv")
-modFitGBM <- train(classe ~ ., data=training, trControl=trc3, method="gbm")
+modFitGBM  <- train(classe ~ ., data=training, trControl=trc, method="gbm", verbose=FALSE)
 modFitGBM
+modFitGBM$finalModel
 ```
 
+Final model accuracy was about 95.8% with estimated  slightly over 4% predicted out of sample error. Testing the model against the validation set confirmed the estimate:
 
-###Summary
+```{r conf_gbm, eval=TRUE, cache=TRUE, warning=FALSE, error=FALSE, message=FALSE}
+confusionMatrix(validation$classe, predict(modFitGBM, newdata=validation))$overall
+```
+
+Prediction vs Response count:   
+```{r plot_cft_gbm, eval=TRUE, echo=FALSE, warning=FALSE, error=FALSE, message=FALSE}
+plot_conf_table(confusionMatrix(validation$classe, predict(modFitGBM, newdata=validation))$table)
+```
+
+As you can see from the table above gradient boosting model has significant misclassification error.
+
+#####Random Forrest
+
+We have evaluated Breiman's random forest algorithm against the data set using 10 fold cross validation resampling to tune model parameters.
+
+```{r modelTrainingRF, eval=TRUE, cache=TRUE, warning=FALSE, error=FALSE, message=FALSE}
+registerDoMC(cores = 8)
+set.seed(420)
+trc <- trainControl(method = "cv")
+modFitRF <- train(classe ~ ., data=training, trControl=trc, method="rf")
+modFitRF
+modFitRF$finalModel
+```
+
+Final model accuracy was about 99.3% with estimated 0.7% predicted out of sample error. Testing the model against the validation set confirmed the estimate.
+
+```{r conf_rf, eval=TRUE, cache=TRUE, warning=FALSE, error=FALSE, message=FALSE}
+confusionMatrix(validation$class, predict(modFitRF, newdata=validation))$overall
+```
+
+Perdition vs Response count:   
+```{r plot_cft_rf, eval=TRUE, echo=FALSE, warning=FALSE, error=FALSE, message=FALSE}
+plot_conf_table(confusionMatrix(validation$class, predict(modFitRF, newdata=validation))$table)
+```
+
+###Conclusion
+We found that Random Forrest model results in significantly smaller out of sample error on the validation data set - 0.6% vs 4%. Random Forest based fit was selected for our final model to run on the test data set. As result, the accuracy on the test data set was 20/20 - 100%.
 
 ###References
+Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013.
